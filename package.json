@@ -1,0 +1,25 @@
+{
+  "name": "snowflake-csv-parser",
+  "version": "1.0.0",
+  "description": "parser to help uploading csvs to snowflake",
+  "main": "index.js",
+  "scripts": {
+    "build": "babel src --extensions '.ts' --out-dir dist",
+    "start": "node dist/parser.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "csv-parser": "^3.1.0",
+    "dotenv": "^16.4.7",
+    "eslint": "^9.19.0",
+    "snowflake-sdk": "^2.0.1"
+  },
+  "devDependencies": {
+    "@babel/cli": "^7.26.4",
+    "@babel/core": "^7.26.7",
+    "@babel/preset-env": "^7.26.7",
+    "@babel/preset-typescript": "^7.26.0",
+    "typescript": "^5.7.3"
+  }
+}

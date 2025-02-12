@@ -1,9 +1,9 @@
 import * as dotenv from "dotenv";
-import { Config } from "./types";
+import { ConfigType } from "./types";
 
 dotenv.config();
 
-export const config: Config = {
+export const config: ConfigType = {
   snowflakeAccount: process.env.SNOWFLAKE_ACCOUNT as string,
   snowflakeUsername: process.env.SNOWFLAKE_USERNAME as string,
   snowflakePassword: process.env.SNOWFLAKE_PASSWORD as string,

@@ -8,7 +8,7 @@ export type Metric = {
   start_date: string;
   end_date: string;
 };
-export interface Config {
+export interface ConfigType {
   snowflakeAccount: string;
   snowflakeUsername: string;
   snowflakePassword: string;

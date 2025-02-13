@@ -32,12 +32,14 @@ export const parser = async (): Promise<void> => {
     fs.createReadStream(csvFilePath)
       .pipe(csv())
       .on("data", (row: Record<string, string>) => {
+        const startDate = (row["Start date"] || "").split(" ")[0];
+        const endDate = (row["End date"] || "").split(" ")[0];
         const user = {
           name: row["Seat holder name"],
           id: row["Seat id"],
         };
         users.add(JSON.stringify(user));
-
+        console.log(startDate, endDate, "startDate, endDate");
         const metric: Metric = {
           seat_id: row["Seat id"],
           profiles_viewed: Number(row["Profiles viewed"] || 0),
@@ -47,8 +49,8 @@ export const parser = async (): Promise<void> => {
           inmails_sent: Number(row["InMails sent"] || 0),
           inmails_accepted: Number(row["InMails accepted"] || 0),
           inmails_declined: Number(row["InMails declined"] || 0),
-          start_date: row["Start date"],
-          end_date: row["End date"],
+          start_date: startDate,
+          end_date: endDate,
         };
         metrics.push(metric);
       })
@@ -90,14 +92,14 @@ async function createSnowflakeTables(
 ): Promise<void> {
   console.log("⏳ Creating tables in Snowflake...");
   const userTableQuery = `
-    CREATE OR REPLACE TABLE users (
+    CREATE TABLE IF NOT EXISTS users (
       id STRING PRIMARY KEY,
       name STRING
     );
   `;
 
   const metricsTableQuery = `
-    CREATE OR REPLACE TABLE metrics (
+    CREATE TABLE IF NOT EXISTS metrics (
       seat_id STRING,
       profiles_viewed STRING,
       profiles_saved_to_project STRING,
@@ -106,7 +108,7 @@ async function createSnowflakeTables(
       inmails_declined STRING,
       start_date TIMESTAMP,
       end_date TIMESTAMP,
-      FOREIGN KEY (seat_id) REFERENCES users(id),
+      FOREIGN KEY (seat_id) REFERENCES users(id)
     )
     CLUSTER BY (seat_id, start_date, end_date);
   `;

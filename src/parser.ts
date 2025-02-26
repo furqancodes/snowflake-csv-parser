@@ -15,14 +15,19 @@ export const parser = async (): Promise<void> => {
     schema: config.snowflakeSchema,
   });
 
-  connection.connect((err, conn) => {
-    if (err) {
-      console.error("Unable to connect: " + err.message);
-      throw "Error while connecting";
-    } else {
-      console.log("Successfully connected to Snowflake.");
-    }
+  // Await Snowflake connection
+  await new Promise((resolve, reject) => {
+    connection.connect((err) => {
+      if (err) {
+        console.error("❌ Unable to connect:", err.message);
+        reject(new Error("Error while connecting to Snowflake"));
+      } else {
+        console.log("✅ Successfully connected to Snowflake.");
+        resolve(null);
+      }
+    });
   });
+
   console.log("⏳ Parsing CSV file...");
   const csvFilePath: string = path.join(__dirname, "data.csv");
   const users = new Set<string>();
@@ -32,44 +37,46 @@ export const parser = async (): Promise<void> => {
     fs.createReadStream(csvFilePath)
       .pipe(csv())
       .on("data", (row: Record<string, string>) => {
-        const startDate = (row["Start date"] || "").split(" ")[0];
-        const endDate = (row["End date"] || "").split(" ")[0];
-        const user = {
-          name: row["Seat holder name"],
-          id: row["Seat id"],
-        };
-        users.add(JSON.stringify(user));
-        console.log(startDate, endDate, "startDate, endDate");
-        const metric: Metric = {
+        const parseNumber = (value: string) =>
+          Number(value.replace(/[\",]/g, "")) || 0;
+
+        users.add(
+          JSON.stringify({ id: row["Seat id"], name: row["Seat holder name"] })
+        );
+
+        metrics.push({
           seat_id: row["Seat id"],
-          profiles_viewed: Number(row["Profiles viewed"] || 0),
-          profiles_saved_to_project: Number(
-            row["Profiles saved to project"] || 0
+          profiles_viewed: parseNumber(row["Profiles viewed"]),
+          profiles_saved_to_project: parseNumber(
+            row["Profiles saved to project"]
           ),
-          inmails_sent: Number(row["InMails sent"] || 0),
-          inmails_accepted: Number(row["InMails accepted"] || 0),
-          inmails_declined: Number(row["InMails declined"] || 0),
-          start_date: startDate,
-          end_date: endDate,
-        };
-        metrics.push(metric);
+          inmails_sent: parseNumber(row["InMails sent"]),
+          inmails_accepted: parseNumber(row["InMails accepted"]),
+          inmails_declined: parseNumber(row["InMails declined"]),
+          start_date: (row["Start date"] || "").split(" ")[0],
+          end_date: (row["End date"] || "").split(" ")[0],
+        });
       })
       .on("end", async () => {
         console.log("✅ CSV parsing completed.");
         await createSnowflakeTables(connection);
         await upsertUsers(connection, users);
-
-        const deduplicated = deduplicateMetrics(metrics);
-        await upsertMetrics(connection, deduplicated);
+        await upsertMetrics(connection, deduplicateMetrics(metrics));
 
         console.log("✅ Data upload to Snowflake completed.");
-        connection.destroy((err) => {
-          if (err) {
-            console.error("Error disconnecting:", err.message);
-          } else {
-            console.log("Connection closed.");
-          }
+
+        // Properly await Snowflake disconnection
+        await new Promise((resolve) => {
+          connection.destroy((err) => {
+            if (err) {
+              console.error("❌ Error disconnecting:", err.message);
+            } else {
+              console.log("✅ Snowflake connection closed.");
+            }
+            resolve(null);
+          });
         });
+
         resolve();
       })
       .on("error", reject);
@@ -91,32 +98,36 @@ async function createSnowflakeTables(
   connection: snowflake.Connection
 ): Promise<void> {
   console.log("⏳ Creating tables in Snowflake...");
-  const userTableQuery = `
+  await executeQuery(
+    connection,
+    `
     CREATE TABLE IF NOT EXISTS users (
       id STRING PRIMARY KEY,
       name STRING
     );
-  `;
-
-  const metricsTableQuery = `
+  `
+  );
+  await executeQuery(
+    connection,
+    `
     CREATE TABLE IF NOT EXISTS metrics (
       seat_id STRING,
-      profiles_viewed STRING,
-      profiles_saved_to_project STRING,
-      inmails_sent STRING,
-      inmails_accepted STRING,
-      inmails_declined STRING,
+      profiles_viewed INTEGER,
+      profiles_saved_to_project INTEGER,
+      inmails_sent INTEGER,
+      inmails_accepted INTEGER,
+      inmails_declined INTEGER,
       start_date TIMESTAMP,
       end_date TIMESTAMP,
       FOREIGN KEY (seat_id) REFERENCES users(id)
     )
     CLUSTER BY (seat_id, start_date, end_date);
-  `;
-  await executeQuery(connection, userTableQuery);
-  await executeQuery(connection, metricsTableQuery);
+  `
+  );
   console.log("✅ Tables created in Snowflake");
 }
 
+// ❌ Parameterized queries removed, returning to old-style string building
 async function upsertUsers(
   connection: snowflake.Connection,
   users: Set<string>
@@ -126,13 +137,17 @@ async function upsertUsers(
     console.log("No users found to upsert.");
     return;
   }
+
+  // Build a VALUES list for the MERGE
   const valuesPart = [...users]
     .map((userStr) => {
       const user = JSON.parse(userStr);
+      // Escape single quotes in user name
       const safeName = user.name.replace(/'/g, "''");
       return `('${user.id}', '${safeName}')`;
     })
     .join(", ");
+
   const mergeUsersQuery = `
     MERGE INTO users AS target
     USING (VALUES ${valuesPart}) AS source (id, name)
@@ -153,6 +168,8 @@ async function upsertMetrics(
     console.log("No metrics found to upsert.");
     return;
   }
+
+  // Build a big VALUES list
   const valuesPart = metrics
     .map((m) => {
       return `(
@@ -167,6 +184,7 @@ async function upsertMetrics(
       )`;
     })
     .join(", ");
+
   const mergeMetricsQuery = `
     MERGE INTO metrics AS target
     USING (
@@ -201,23 +219,25 @@ async function upsertMetrics(
       source.end_date
     );
   `;
+
   await executeQuery(connection, mergeMetricsQuery);
   console.log("✅ Metrics upserted.");
 }
 
-function executeQuery(
+async function executeQuery(
   connection: snowflake.Connection,
   query: string
 ): Promise<any> {
+  console.log(`Executing Query: ${query}`);
   return new Promise((resolve, reject) => {
     connection.execute({
       sqlText: query,
       complete: (err, stmt, rows) => {
         if (err) {
-          console.error("Error executing query:", err.message);
+          console.error("❌ Query failed:", err.message);
           reject(err);
         } else {
-          console.log("Query executed successfully");
+          console.log("✅ Query executed successfully");
           resolve(rows);
         }
       },

@@ -4,53 +4,67 @@ import * as snowflake from "snowflake-sdk";
 import { parser } from "../src/parser";
 import { config } from "../src/config";
 
-function runSnowflakeQuery(sqlText: string): Promise<any[]> {
+let connection: snowflake.Connection;
+
+function runSnowflakeQuery(sqlText: string, binds: any[] = []): Promise<any[]> {
   return new Promise((resolve, reject) => {
-    const connection = snowflake.createConnection({
-      account: config.snowflakeAccount,
-      username: config.snowflakeUsername,
-      password: config.snowflakePassword,
-      database: "TEST_DB",
-      schema: "TEST_SCHEMA",
-    });
-    connection.connect((err) => {
-      if (err) return reject(err);
-      connection.execute({
-        sqlText,
-        complete: (execErr, stmt, rows) => {
-          connection.destroy(() => {
-            if (execErr) reject(execErr);
-            else resolve(rows || []);
-          });
-        },
-      });
+    connection.execute({
+      sqlText,
+      binds,
+      complete: (execErr, stmt, rows) => {
+        if (execErr) reject(execErr);
+        else resolve(rows || []);
+      },
     });
   });
 }
 
 describe("parser integration tests (test DB)", () => {
   jest.setTimeout(30000);
-
   const TEST_DB = "TEST_DB";
   const TEST_SCHEMA = "TEST_SCHEMA";
 
   beforeAll(async () => {
+    connection = snowflake.createConnection({
+      account: config.snowflakeAccount,
+      username: config.snowflakeUsername,
+      password: config.snowflakePassword,
+      database: TEST_DB,
+      schema: TEST_SCHEMA,
+    });
+
+    await new Promise((resolve, reject) => {
+      connection.connect((err) => (err ? reject(err) : resolve(null)));
+    });
+    await runSnowflakeQuery(`DROP DATABASE IF EXISTS ${TEST_DB}`);
     await runSnowflakeQuery(`CREATE DATABASE IF NOT EXISTS ${TEST_DB}`);
     await runSnowflakeQuery(`CREATE SCHEMA IF NOT EXISTS ${TEST_SCHEMA}`);
     await runSnowflakeQuery(`USE DATABASE ${TEST_DB}`);
     await runSnowflakeQuery(`USE SCHEMA ${TEST_SCHEMA}`);
+
     config.snowflakeDatabase = TEST_DB;
     config.snowflakeSchema = TEST_SCHEMA;
   });
 
+  afterEach(async () => {
+    await runSnowflakeQuery(`DELETE FROM users`);
+    await runSnowflakeQuery(`DELETE FROM metrics`);
+  });
+
   afterAll(async () => {
+    await runSnowflakeQuery(`DROP DATABASE IF EXISTS ${TEST_DB}`);
+    if (connection) {
+      await new Promise((resolve) => {
+        connection.destroy(() => {
+          console.log("✅ Snowflake connection closed.");
+          resolve(null);
+        });
+      });
+    }
     const dataCsvPath = path.join(__dirname, "..", "src", "data.csv");
     if (fs.existsSync(dataCsvPath)) {
       fs.unlinkSync(dataCsvPath);
     }
-
-    config.snowflakeDatabase = process.env.SNOWFLAKE_DATABASE || "";
-    config.snowflakeSchema = process.env.SNOWFLAKE_SCHEMA || "";
   });
 
   function copyFixture(fixtureName: string) {
@@ -91,6 +105,6 @@ describe("parser integration tests (test DB)", () => {
     await parser();
     const rows = await runSnowflakeQuery("SELECT * FROM metrics;");
     expect(rows.length).toBeGreaterThan(0);
-    expect(rows[0].PROFILES_VIEWED).toBe("100");
+    expect(rows[0].PROFILES_VIEWED).toBe(100);
   });
 });

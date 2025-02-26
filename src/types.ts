@@ -15,5 +15,4 @@ export interface ConfigType {
   snowflakeWarehouse: string;
   snowflakeDatabase: string;
   snowflakeSchema: string;
-  snowflakeStage: string;
 }

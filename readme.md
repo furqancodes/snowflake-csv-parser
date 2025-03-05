@@ -30,10 +30,7 @@ The Snowflake CSV Parser is a tool designed to parse CSV files and load the data
   ```
 
 ## Configuration
-1. Create a env file in the project root with the structure mentioned in .env.example file.
-
-
-
+1. Create an `.env` file in the project root with the structure mentioned in the `.env.example` file.
 
 ## Usage
 1. Place your CSV files in the `dist/data` directory.
@@ -46,3 +43,7 @@ The Snowflake CSV Parser is a tool designed to parse CSV files and load the data
   npm run start
   ```
 4. Monitor the logs for progress and any errors.
+
+## Contact
+For any questions or feedback, please open an issue on the [GitHub repository](https://github.com/furqancodes/snowflake-csv-parser).
+

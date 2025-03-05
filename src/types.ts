@@ -16,3 +16,7 @@ export interface ConfigType {
   snowflakeDatabase: string;
   snowflakeSchema: string;
 }
+export interface ColumnDefinition {
+  name: string;
+  type: string; // e.g., "STRING", "INTEGER", "TIMESTAMP"
+}

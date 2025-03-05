@@ -18,5 +18,5 @@ export interface ConfigType {
 }
 export interface ColumnDefinition {
   name: string;
-  type: string; // e.g., "STRING", "INTEGER", "TIMESTAMP"
+  type: string;
 }

@@ -3,7 +3,9 @@ import * as fs from "fs";
 import * as path from "path";
 import csv from "csv-parser";
 import { config } from "./config";
-import { Metric } from "./types";
+import { ColumnDefinition, Metric } from "./types";
+import { getOrCreateVersionedTable } from "./utils/versionedTableUtils";
+import { runQuery } from "./helpers/helper";
 
 export const parser = async (): Promise<void> => {
   const connection = snowflake.createConnection({
@@ -15,18 +17,48 @@ export const parser = async (): Promise<void> => {
     schema: config.snowflakeSchema,
   });
 
-  // Await Snowflake connection
-  await new Promise((resolve, reject) => {
+  // Connect (asynchronously)
+  await new Promise<void>((resolve, reject) => {
     connection.connect((err) => {
       if (err) {
         console.error("❌ Unable to connect:", err.message);
         reject(new Error("Error while connecting to Snowflake"));
       } else {
         console.log("✅ Successfully connected to Snowflake.");
-        resolve(null);
+        resolve();
       }
     });
   });
+
+  // 1) Decide desired columns for 'users' and 'metrics'
+  const USER_COLUMNS: ColumnDefinition[] = [
+    { name: "id", type: "STRING PRIMARY KEY" },
+    { name: "name", type: "STRING" },
+  ];
+  const METRIC_COLUMNS: ColumnDefinition[] = [
+    { name: "seat_id", type: "STRING" },
+    { name: "profiles_viewed", type: "INTEGER" },
+    { name: "profiles_saved_to_project", type: "INTEGER" },
+    { name: "inmails_sent", type: "INTEGER" },
+    { name: "inmails_accepted", type: "INTEGER" },
+    { name: "inmails_declined", type: "INTEGER" },
+    { name: "start_date", type: "TIMESTAMP" },
+    { name: "end_date", type: "TIMESTAMP" },
+  ];
+
+  // 2) Get or create versioned tables
+  const usersTableName = await getOrCreateVersionedTable(
+    connection,
+    config.snowflakeSchema,
+    "users",
+    USER_COLUMNS
+  );
+  const metricsTableName = await getOrCreateVersionedTable(
+    connection,
+    config.snowflakeSchema,
+    "metrics",
+    METRIC_COLUMNS
+  );
 
   console.log("⏳ Parsing CSV file...");
   const csvFilePath: string = path.join(__dirname, "data.csv");
@@ -59,13 +91,18 @@ export const parser = async (): Promise<void> => {
       })
       .on("end", async () => {
         console.log("✅ CSV parsing completed.");
-        await createSnowflakeTables(connection);
-        await upsertUsers(connection, users);
-        await upsertMetrics(connection, deduplicateMetrics(metrics));
+
+        // 3) Upsert data into your versioned tables
+        await upsertUsers(connection, usersTableName, users);
+        await upsertMetrics(
+          connection,
+          metricsTableName,
+          deduplicateMetrics(metrics)
+        );
 
         console.log("✅ Data upload to Snowflake completed.");
 
-        // Properly await Snowflake disconnection
+        // 4) Clean up connection
         await new Promise((resolve) => {
           connection.destroy((err) => {
             if (err) {
@@ -94,45 +131,12 @@ function deduplicateMetrics(metrics: Metric[]): Metric[] {
   return Array.from(map.values());
 }
 
-async function createSnowflakeTables(
-  connection: snowflake.Connection
-): Promise<void> {
-  console.log("⏳ Creating tables in Snowflake...");
-  await executeQuery(
-    connection,
-    `
-    CREATE TABLE IF NOT EXISTS users (
-      id STRING PRIMARY KEY,
-      name STRING
-    );
-  `
-  );
-  await executeQuery(
-    connection,
-    `
-    CREATE TABLE IF NOT EXISTS metrics (
-      seat_id STRING,
-      profiles_viewed INTEGER,
-      profiles_saved_to_project INTEGER,
-      inmails_sent INTEGER,
-      inmails_accepted INTEGER,
-      inmails_declined INTEGER,
-      start_date TIMESTAMP,
-      end_date TIMESTAMP,
-      FOREIGN KEY (seat_id) REFERENCES users(id)
-    )
-    CLUSTER BY (seat_id, start_date, end_date);
-  `
-  );
-  console.log("✅ Tables created in Snowflake");
-}
-
-// ❌ Parameterized queries removed, returning to old-style string building
 async function upsertUsers(
   connection: snowflake.Connection,
+  tableName: string,
   users: Set<string>
 ): Promise<void> {
-  console.log("⏳ Upserting users into Snowflake...");
+  console.log(`⏳ Upserting users into ${tableName} ...`);
   if (users.size === 0) {
     console.log("No users found to upsert.");
     return;
@@ -142,34 +146,33 @@ async function upsertUsers(
   const valuesPart = [...users]
     .map((userStr) => {
       const user = JSON.parse(userStr);
-      // Escape single quotes in user name
       const safeName = user.name.replace(/'/g, "''");
       return `('${user.id}', '${safeName}')`;
     })
     .join(", ");
 
   const mergeUsersQuery = `
-    MERGE INTO users AS target
+    MERGE INTO ${tableName} AS target
     USING (VALUES ${valuesPart}) AS source (id, name)
     ON target.id = source.id
     WHEN MATCHED THEN UPDATE SET target.name = source.name
     WHEN NOT MATCHED THEN INSERT (id, name) VALUES (source.id, source.name);
   `;
-  await executeQuery(connection, mergeUsersQuery);
+  await runQuery(connection, mergeUsersQuery);
   console.log("✅ Users upserted.");
 }
 
 async function upsertMetrics(
   connection: snowflake.Connection,
+  tableName: string,
   metrics: Metric[]
 ): Promise<void> {
-  console.log("⏳ Upserting metrics into Snowflake...");
+  console.log(`⏳ Upserting metrics into ${tableName} ...`);
   if (metrics.length === 0) {
     console.log("No metrics found to upsert.");
     return;
   }
 
-  // Build a big VALUES list
   const valuesPart = metrics
     .map((m) => {
       return `(
@@ -186,7 +189,7 @@ async function upsertMetrics(
     .join(", ");
 
   const mergeMetricsQuery = `
-    MERGE INTO metrics AS target
+    MERGE INTO ${tableName} AS target
     USING (
       VALUES ${valuesPart}
     ) AS source (
@@ -219,28 +222,6 @@ async function upsertMetrics(
       source.end_date
     );
   `;
-
-  await executeQuery(connection, mergeMetricsQuery);
+  await runQuery(connection, mergeMetricsQuery);
   console.log("✅ Metrics upserted.");
-}
-
-async function executeQuery(
-  connection: snowflake.Connection,
-  query: string
-): Promise<any> {
-  console.log(`Executing Query: ${query}`);
-  return new Promise((resolve, reject) => {
-    connection.execute({
-      sqlText: query,
-      complete: (err, stmt, rows) => {
-        if (err) {
-          console.error("❌ Query failed:", err.message);
-          reject(err);
-        } else {
-          console.log("✅ Query executed successfully");
-          resolve(rows);
-        }
-      },
-    });
-  });
 }

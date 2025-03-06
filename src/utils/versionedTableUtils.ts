@@ -1,7 +1,7 @@
 // versionedTableUtils.ts
 
 import { Connection } from "snowflake-sdk";
-import { runQuery } from "../helpers/helper";
+import { normalizeType, runQuery } from "../helpers/helper";
 import { ColumnDefinition } from "../types";
 
 /**
@@ -126,9 +126,9 @@ async function doColumnsMatch(
 
   for (let i = 0; i < rows.length; i++) {
     const actualName = rows[i].COLUMN_NAME.toLowerCase();
-    const actualType = rows[i].DATA_TYPE.toUpperCase();
+    const actualType = normalizeType(rows[i].DATA_TYPE);
     const desiredName = desiredColumns[i].name.toLowerCase();
-    const desiredType = desiredColumns[i].type.toUpperCase();
+    const desiredType = normalizeType(desiredColumns[i].type);
 
     if (actualName !== desiredName || actualType !== desiredType) {
       return false;
